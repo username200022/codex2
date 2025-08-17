@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AI Business Consultant</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      // This configures Tailwind to use the 'class' strategy for dark mode,
+      // allowing the theme switcher to work. It MUST come AFTER the main
+      // Tailwind CDN script.
+      tailwind.config = {
+        darkMode: 'class',
+      }
+    </script>
+    <link rel="stylesheet" href="https://esm.sh/reactflow@^11.11.4/dist/style.css" />
+    <style>
+      /* Custom, theme-aware scrollbars for a modern look */
+      /* For Webkit-based browsers (Chrome, Safari, Edge) */
+      ::-webkit-scrollbar {
+        width: 12px;
+      }
+      ::-webkit-scrollbar-track {
+        background: transparent;
+      }
+      ::-webkit-scrollbar-thumb {
+        background-color: #d1d5db; /* gray-300 */
+        border-radius: 20px;
+        border: 3px solid transparent;
+        background-clip: content-box;
+      }
+      ::-webkit-scrollbar-thumb:hover {
+        background-color: #9ca3af; /* gray-400 */
+      }
+      /* Dark mode styles */
+      .dark ::-webkit-scrollbar-thumb {
+        background-color: #4b5563; /* gray-600 */
+      }
+      .dark ::-webkit-scrollbar-thumb:hover {
+        background-color: #6b7280; /* gray-500 */
+      }
+      /* For Firefox */
+      html {
+        scrollbar-width: thin;
+        scrollbar-color: #d1d5db transparent; /* thumb and track color for light mode */
+      }
+      html.dark {
+        scrollbar-color: #4b5563 transparent; /* thumb and track color for dark mode */
+      }
+    </style>
+  <script>
+    // Initialize theme from localStorage or system preference to avoid FOUC
+    if (localStorage.theme === 'dark' || (!('theme' in localStorage) && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+      document.documentElement.classList.add('dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+    }
+  </script>
+  <script type="importmap">
+{
+  "imports": {
+    "@google/genai": "https://esm.sh/@google/genai@^1.13.0",
+    "react/": "https://esm.sh/react@^19.1.1/",
+    "react": "https://esm.sh/react@^19.1.1",
+    "react-dom/": "https://esm.sh/react-dom@^19.1.1/",
+    "marked": "https://esm.sh/marked@^13.0.0",
+    "reactflow": "https://esm.sh/reactflow@^11.11.4",
+    "dagre": "https://esm.sh/dagre@^0.8.5",
+    "recharts": "https://esm.sh/recharts@^2.12.7",
+    "./services/geminiService": "./services/geminiService.ts",
+    "./services/mockGeminiService": "./services/mockGeminiService.ts",
+    "./utils/plan-parser": "./utils/plan-parser.ts",
+    "./components/SWOTAnalysisView": "./components/SWOTAnalysisView.tsx",
+    "./components/ExecutiveSummary": "./components/ExecutiveSummary.tsx",
+    "./components/FinancialProjections": "./components/FinancialProjections.tsx",
+    "./components/charts/BreakEvenChart": "./components/charts/BreakEvenChart.tsx",
+    "./components/modals/StaffCostModal": "./components/modals/StaffCostModal.tsx",
+    "./components/modals/MarketingCostModal": "./components/modals/MarketingCostModal.tsx",
+    "./components/EditableCostControl": "./components/EditableCostControl.tsx"
+  }
+}
+</script>
+</head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/index.tsx"></script>
+  </body>
+</html>

@@ -1,0 +1,6 @@
+{
+  "name": "AI Business Consultant Chat",
+  "description": "An intelligent, data-driven AI consultant that provides tailored business plans by asking clarifying questions. The AI adapts its expertise to the user's domain and summarizes conversations for efficiency.",
+  "requestFramePermissions": [],
+  "prompt": ""
+}
