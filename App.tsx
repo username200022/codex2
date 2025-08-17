@@ -1,6 +1,18 @@
 
 
 import React, { useState, useEffect, useRef } from 'react';
+import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import { useAuth } from './hooks/useAuth';
+import LoginPage from './components/LoginPage';
+import AuthCallback from './components/AuthCallback';
+import ConversationSidebar from './components/ConversationSidebar';
+import { 
+    createMessage, 
+    getConversationMessages, 
+    saveBusinessPlan, 
+    updateConversationTitle,
+    createConversation 
+} from './lib/supabase';
 import { type ChatMessage, Role, type QuestionWithOptions, type PlanContext, type ClarifyingQuestionsState } from './types';
 // --- API SERVICE SWITCH ---
 // To use the REAL Gemini API, use the geminiService import.
@@ -14,6 +26,7 @@ import { Header } from './components/Layout';
 import PlanGenerationLoader from './components/PlanGenerationLoader';
 import PlanWorkspace from './components/PlanWorkspace';
 import ClarifyingQuestionsForm from './components/ClarifyingQuestionsForm';
+import { parsePlan } from './utils/plan-parser';
 
 type WorkspaceView = 'flowchart' | 'text' | 'dashboard' | 'details' | 'swot' | 'projections';
 
@@ -54,8 +67,11 @@ const WelcomeMessage: React.FC<{onSendMessage: (text: string) => void}> = ({ onS
 };
 
 
-const App: React.FC = () => {
+const MainApp: React.FC = () => {
+    const { user } = useAuth();
     const [messages, setMessages] = useState<ChatMessage[]>([]);
+    const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
+    const [sidebarOpen, setSidebarOpen] = useState(false);
     const [isLoading, setIsLoading] = useState(false);
     const [clarifyingQuestions, setClarifyingQuestions] = useState<ClarifyingQuestionsState | null>(null);
     const [lastPlan, setLastPlan] = useState<{ message: ChatMessage; context: PlanContext } | null>(null);
@@ -63,6 +79,68 @@ const App: React.FC = () => {
     const [isWorkspaceView, setIsWorkspaceView] = useState(false);
     const [activeWorkspaceView, setActiveWorkspaceView] = useState<WorkspaceView>('flowchart');
     const chatEndRef = useRef<HTMLDivElement>(null);
+
+    // Load conversation messages when conversation changes
+    useEffect(() => {
+        if (currentConversationId) {
+            loadConversationMessages(currentConversationId);
+        }
+    }, [currentConversationId]);
+
+    const loadConversationMessages = async (conversationId: string) => {
+        try {
+            const { data, error } = await getConversationMessages(conversationId);
+            if (error) throw error;
+            
+            const chatMessages: ChatMessage[] = (data || []).map(msg => ({
+                id: msg.id,
+                role: msg.role === 'user' ? Role.USER : Role.ASSISTANT,
+                content: msg.content
+            }));
+            
+            setMessages(chatMessages);
+            
+            // Check if there's a plan in the messages and set up workspace
+            const planMessage = chatMessages.find(msg => 
+                msg.role === Role.ASSISTANT && msg.content.includes('Business Plan:')
+            );
+            
+            if (planMessage) {
+                const { financialData } = parsePlan(planMessage.content);
+                // Set up lastPlan context if needed
+                setLastPlan({ 
+                    message: planMessage, 
+                    context: { questions: [], answers: {}, additionalRequirements: [] }
+                });
+                setIsWorkspaceView(true);
+            }
+        } catch (error) {
+            console.error('Error loading conversation messages:', error);
+        }
+    };
+
+    const handleConversationSelect = (conversationId: string) => {
+        setCurrentConversationId(conversationId);
+        setIsWorkspaceView(false);
+        setLastPlan(null);
+        setClarifyingQuestions(null);
+    };
+
+    const handleNewConversation = async () => {
+        try {
+            const { data, error } = await createConversation('New Business Plan');
+            if (error) throw error;
+            if (data) {
+                setCurrentConversationId(data.id);
+                setMessages([]);
+                setIsWorkspaceView(false);
+                setLastPlan(null);
+                setClarifyingQuestions(null);
+            }
+        } catch (error) {
+            console.error('Error creating conversation:', error);
+        }
+    };
 
     const initialUserQuery = messages.find(m => m.role === Role.USER)?.content || '';
 
@@ -78,6 +156,18 @@ const App: React.FC = () => {
 
     const handleSendMessage = async (text: string, submissionContext?: Omit<PlanContext, 'additionalRequirements'>) => {
         if (!text.trim() && !submissionContext) return;
+        
+        // Create conversation if none exists
+        let conversationId = currentConversationId;
+        if (!conversationId) {
+            const { data, error } = await createConversation('New Business Plan');
+            if (error) {
+                console.error('Error creating conversation:', error);
+                return;
+            }
+            conversationId = data!.id;
+            setCurrentConversationId(conversationId);
+        }
 
         const newUserMessage: ChatMessage = {
             id: `user-${Date.now()}`,
@@ -87,6 +177,13 @@ const App: React.FC = () => {
 
         const updatedMessages = [...messages, newUserMessage];
         setMessages(updatedMessages);
+        
+        // Save user message to database
+        try {
+            await createMessage(conversationId!, 'user', text);
+        } catch (error) {
+            console.error('Error saving user message:', error);
+        }
 
         if (!isWorkspaceView) {
             setIsWorkspaceView(true);
@@ -112,6 +209,13 @@ const App: React.FC = () => {
                         content: response.text,
                     };
                     finalMessages.push(aiTextMessage);
+                    
+                    // Save AI text message to database
+                    try {
+                        await createMessage(conversationId!, 'assistant', response.text, 'text');
+                    } catch (error) {
+                        console.error('Error saving AI text message:', error);
+                    }
                 }
 
                 const newPlanMessage: ChatMessage = {
@@ -144,6 +248,28 @@ const App: React.FC = () => {
                 }
                 
                 setLastPlan({ message: newPlanMessage, context: newContext });
+                
+                // Save plan message and business plan to database
+                try {
+                    await createMessage(conversationId!, 'assistant', response.planContent!, 'plan');
+                    
+                    const { title, financialData, swotData } = parsePlan(response.planContent!);
+                    await saveBusinessPlan(
+                        conversationId!,
+                        title,
+                        response.planContent!,
+                        financialData,
+                        swotData,
+                        newContext
+                    );
+                    
+                    // Update conversation title if it's still default
+                    if (title && title !== 'New Business Plan') {
+                        await updateConversationTitle(conversationId!, title);
+                    }
+                } catch (error) {
+                    console.error('Error saving plan:', error);
+                }
 
                 // Add a canned follow-up question, ONLY on the very first generation.
                 if (!lastPlan) {
@@ -153,6 +279,13 @@ const App: React.FC = () => {
                         content: "Here is your initial business plan. Does this align with your vision? Feel free to provide any additional details or requirements you'd like me to incorporate."
                     };
                     finalMessages.push(followupMessage);
+                    
+                    // Save follow-up message to database
+                    try {
+                        await createMessage(conversationId!, 'assistant', followupMessage.content);
+                    } catch (error) {
+                        console.error('Error saving follow-up message:', error);
+                    }
                 }
 
                 setActiveWorkspaceView('text');
@@ -176,6 +309,13 @@ const App: React.FC = () => {
                         content: response.text,
                     };
                     finalMessages.push(aiTextMessage);
+                    
+                    // Save AI text message to database
+                    try {
+                        await createMessage(conversationId!, 'assistant', response.text);
+                    } catch (error) {
+                        console.error('Error saving AI message:', error);
+                    }
                 }
                 setClarifyingQuestions(null); // Clear any old questions
             }
@@ -258,40 +398,80 @@ const App: React.FC = () => {
     };
 
     return (
-        <div className="flex flex-col h-screen bg-gray-100 dark:bg-gray-900 text-gray-900 dark:text-gray-100 font-sans">
-            <Header />
-            {isWorkspaceView ? (
-                <div className="flex flex-1 overflow-hidden">
-                    {/* Left Panel: Chat History */}
-                    <aside className="w-full max-w-md lg:max-w-lg flex flex-col bg-white/50 dark:bg-gray-800/50 border-r border-gray-200 dark:border-gray-700">
-                        <main className="flex-1 overflow-y-auto p-4 space-y-6">
-                            {messages.map((msg) => (
-                                <ChatMessageBubble key={msg.id} message={msg} />
-                            ))}
-                            {isLoading && !clarifyingQuestions && (
-                                <TypingIndicator wittyMessages={wittyMessages} />
-                            )}
-                            <div ref={chatEndRef} />
+        <div className="flex h-screen bg-gray-100 dark:bg-gray-900 text-gray-900 dark:text-gray-100 font-sans">
+            <ConversationSidebar
+                currentConversationId={currentConversationId}
+                onConversationSelect={handleConversationSelect}
+                onNewConversation={handleNewConversation}
+                isOpen={sidebarOpen}
+                onToggle={() => setSidebarOpen(!sidebarOpen)}
+            />
+            
+            <div className="flex-1 flex flex-col overflow-hidden">
+                <Header />
+                {isWorkspaceView ? (
+                    <div className="flex flex-1 overflow-hidden">
+                        {/* Left Panel: Chat History */}
+                        <aside className="w-full max-w-md lg:max-w-lg flex flex-col bg-white/50 dark:bg-gray-800/50 border-r border-gray-200 dark:border-gray-700">
+                            <main className="flex-1 overflow-y-auto p-4 space-y-6">
+                                {messages.map((msg) => (
+                                    <ChatMessageBubble key={msg.id} message={msg} />
+                                ))}
+                                {isLoading && !clarifyingQuestions && (
+                                    <TypingIndicator wittyMessages={wittyMessages} />
+                                )}
+                                <div ref={chatEndRef} />
+                            </main>
+                             <footer className="bg-gray-100 dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 p-4">
+                                <MessageInput onSendMessage={handleSendMessage} isLoading={isLoading || !!clarifyingQuestions} />
+                            </footer>
+                        </aside>
+                        {/* Right Panel: Workspace */}
+                        <main className="flex-1 overflow-y-auto bg-gray-50 dark:bg-gray-900">
+                            <RightPanelContent />
                         </main>
-                         <footer className="bg-gray-100 dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 p-4">
-                            <MessageInput onSendMessage={handleSendMessage} isLoading={isLoading || !!clarifyingQuestions} />
+                    </div>
+                ) : (
+                    <div className="flex flex-col flex-1 overflow-hidden">
+                        <main className="flex-1 overflow-y-auto p-4 md:p-6 space-y-6">
+                           <WelcomeMessage onSendMessage={handleSendMessage} />
+                        </main>
+                        <footer className="bg-gray-100/50 dark:bg-gray-900/50 backdrop-blur-sm border-t border-gray-200 dark:border-gray-700 p-4 md:p-6">
+                            <MessageInput onSendMessage={handleSendMessage} isLoading={isLoading} />
                         </footer>
-                    </aside>
-                    {/* Right Panel: Workspace */}
-                    <main className="flex-1 overflow-y-auto bg-gray-50 dark:bg-gray-900">
-                        <RightPanelContent />
-                    </main>
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+};
+
+const App: React.FC = () => {
+    const { user, loading } = useAuth();
+
+    if (loading) {
+        return (
+            <div className="min-h-screen flex items-center justify-center bg-gray-100 dark:bg-gray-900">
+                <div className="text-center">
+                    <div className="w-16 h-16 border-4 border-cyan-500/50 border-t-cyan-500 rounded-full animate-spin mx-auto mb-4"></div>
+                    <p className="text-gray-600 dark:text-gray-400">Loading...</p>
                 </div>
-            ) : (
-                <div className="flex flex-col flex-1 overflow-hidden">
-                    <main className="flex-1 overflow-y-auto p-4 md:p-6 space-y-6">
-                       <WelcomeMessage onSendMessage={handleSendMessage} />
-                    </main>
-                    <footer className="bg-gray-100/50 dark:bg-gray-900/50 backdrop-blur-sm border-t border-gray-200 dark:border-gray-700 p-4 md:p-6">
-                        <MessageInput onSendMessage={handleSendMessage} isLoading={isLoading} />
-                    </footer>
-                </div>
-            )}
+            </div>
+        );
+    }
+
+    return (
+        <Router>
+            <Routes>
+                <Route path="/login" element={!user ? <LoginPage /> : <Navigate to="/" />} />
+                <Route path="/auth/callback" element={<AuthCallback />} />
+                <Route path="/" element={user ? <MainApp /> : <Navigate to="/login" />} />
+            </Routes>
+        </Router>
+    );
+};
+
+export default App;
         </div>
     );
 };
